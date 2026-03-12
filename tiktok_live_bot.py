@@ -325,14 +325,20 @@ def get_keywords(context) -> str:
 def split_into_chunks(text: str, max_len: int = 480) -> list:
     """텍스트를 480자 이내 청크로 분할 (최대 3개)"""
     chunks = []
+
     while len(text) > max_len and len(chunks) < 2:
         split_at = text.rfind("\n", 0, max_len)
         if split_at == -1:
+            split_at = text.rfind(" ", 0, max_len)
+        if split_at == -1:
             split_at = max_len
+
         chunks.append(text[:split_at].strip())
         text = text[split_at:].strip()
 
-    chunks.append(text[:max_len].strip())
+    if text:
+        chunks.append(text[:max_len].strip())
+
     return chunks[:3]
 
 
@@ -340,24 +346,33 @@ def format_post_for_threads(raw_text: str) -> str:
     sections = {"title": [], "body": [], "summary": [], "cta": []}
     current = None
 
+    labels = {
+        "제목:": "title",
+        "본문:": "body",
+        "한줄요약:": "summary",
+        "CTA:": "cta",
+    }
+
     for line in raw_text.splitlines():
         stripped = line.strip()
-
-        if stripped == "제목:":
-            current = "title"
-            continue
-        elif stripped == "본문:":
-            current = "body"
-            continue
-        elif stripped == "한줄요약:":
-            current = "summary"
-            continue
-        elif stripped == "CTA:":
-            current = "cta"
+        if not stripped:
             continue
 
-        if current and stripped:
-            sections[current].append(line)
+        matched = False
+        for label, section_name in labels.items():
+            if stripped.startswith(label):
+                current = section_name
+                content = stripped[len(label):].strip()
+                if content:
+                    sections[current].append(content)
+                matched = True
+                break
+
+        if matched:
+            continue
+
+        if current:
+            sections[current].append(stripped)
 
     title = "\n".join(sections["title"]).strip()
     body = "\n".join(sections["body"]).strip()
@@ -371,6 +386,9 @@ def post_to_threads(text: str) -> str:
     """Threads에 본문 + 댓글 체인으로 발행"""
     try:
         chunks = split_into_chunks(text)
+
+        if not chunks:
+            return "❌ 발행할 텍스트가 비어 있어요."
 
         res = requests.post(
             f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads",
@@ -400,6 +418,7 @@ def post_to_threads(text: str) -> str:
             return f"❌ 본문 발행 실패: {pub}"
 
         reply_to = post_id
+
         for chunk in chunks[1:]:
             res = requests.post(
                 f"https://graph.threads.net/v1.0/{THREADS_USER_ID}/threads",
@@ -446,6 +465,12 @@ def generate_text(user_prompt: str, keywords: str = "", use_search: bool = False
 
 추가 지시:
 - 출력 형식을 정확히 지켜.
+- 반드시 아래 형식 그대로 출력해.
+제목:
+본문:
+한줄요약:
+CTA:
+- 각 항목명 뒤에는 바로 내용을 붙이지 말고 줄바꿈 후 작성해.
 - 검색 결과가 있으면 그 범위 안에서만 최신 사실을 사용해.
 - 없는 사실은 추측해서 쓰지 마.
 - 에이전시 혜택은 주제와 관련 있을 때만 자연스럽게 활용해.
@@ -459,6 +484,7 @@ def generate_text(user_prompt: str, keywords: str = "", use_search: bool = False
             {"role": "user", "content": full_prompt},
         ],
     )
+
     return response.choices[0].message.content
 
 
